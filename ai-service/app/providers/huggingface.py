@@ -36,13 +36,20 @@ class HuggingFaceProvider(BaseAIProvider):
         self.timeout = timeout
         self.base_url = "https://api-inference.huggingface.co/models"
 
-    async def generate_chat(self, messages: list[dict], temperature: float = 0.7, **kwargs) -> str:
+    async def generate_chat(
+        self, messages: list[dict], temperature: float = 0.7, **kwargs
+    ) -> str:
         # Flatten messages into a single prompt for HF
         role_labels = {"user": "User", "assistant": "Assistant", "system": "System"}
         prompt = "\n\n".join(
-            f"{role_labels.get(m['role'], m['role'])}: {m['content']}" for m in messages
+            f"{role_labels.get(m['role'], m['role'])}: {m['content']}"
+            for m in messages
         )
-        
+        return await self.generate_text(prompt, temperature=temperature, **kwargs)
+
+    async def generate_text(
+        self, prompt: str, temperature: float = 0.7, **kwargs
+    ) -> str:
         payload = {
             "inputs": prompt,
             "parameters": {
@@ -50,9 +57,11 @@ class HuggingFaceProvider(BaseAIProvider):
                 "max_new_tokens": kwargs.get("max_new_tokens", 1024),
                 "return_full_text": False,
             },
+            "stream": True,
         }
         response_data = await self._send_request(payload)
         try:
+            # HF Inference API returns: [{ "generated_text": "..." }]
             if isinstance(response_data, list) and len(response_data) > 0:
                 return response_data[0]["generated_text"].strip()
             raise KeyError("Empty response array from Hugging Face")
@@ -63,7 +72,11 @@ class HuggingFaceProvider(BaseAIProvider):
             )
 
     async def generate_json(
-        self, prompt: str, schema: Dict[str, Any], temperature: float = 0.2, **kwargs
+        self,
+        prompt: str,
+        schema: Dict[str, Any],
+        temperature: float = 0.2,
+        **kwargs,
     ) -> Dict[str, Any]:
         json_prompt = (
             f"{prompt}\n\nRespond ONLY with valid JSON matching this schema:\n"
@@ -76,6 +89,7 @@ class HuggingFaceProvider(BaseAIProvider):
                 "max_new_tokens": kwargs.get("max_new_tokens", 1024),
                 "return_full_text": False,
             },
+            "stream": True,
         }
         response_data = await self._send_request(payload)
         try:
@@ -96,7 +110,14 @@ class HuggingFaceProvider(BaseAIProvider):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+
+        timeout_config = httpx.Timeout(
+            self.timeout,
+            connect=self.timeout,
+            pool=self.timeout,
+        )
+
+        async with httpx.AsyncClient(timeout=timeout_config) as client:
             try:
                 async with client.stream(
                     "POST", url, headers=headers, json=payload
@@ -107,6 +128,7 @@ class HuggingFaceProvider(BaseAIProvider):
                             self.provider_name,
                             status_code=429,
                         )
+
                     if response.is_error:
                         body = await response.aread()
                         raise ProviderAPIError(
@@ -114,7 +136,9 @@ class HuggingFaceProvider(BaseAIProvider):
                             self.provider_name,
                             status_code=response.status_code,
                         )
+
                     return await self._read_json_with_limit(response)
+
             except httpx.TimeoutException:
                 raise ProviderTimeoutError(
                     "Hugging Face API request timed out", self.provider_name
@@ -140,6 +164,7 @@ class HuggingFaceProvider(BaseAIProvider):
                     self.provider_name,
                 )
             chunks.append(chunk)
+
         try:
             return json.loads(b"".join(chunks))
         except json.JSONDecodeError as e:

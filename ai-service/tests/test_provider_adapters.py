@@ -25,7 +25,6 @@ DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
 HUGGINGFACE_URL_PREFIX = "https://api-inference.huggingface.co/models/"
 NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 
-
 # ===========================================================================
 # 1. Import sanity (issue checklist item #1)
 # ===========================================================================
@@ -155,6 +154,40 @@ async def test_gemini_generate_json_returns_parsed_dict():
 
     assert result == {"template": "certificate-a"}
 
+    
+@pytest.mark.asyncio
+@respx.mock
+async def test_huggingface_sends_stream_true():
+    route = respx.post(url__startswith=HUGGINGFACE_URL_PREFIX).mock(
+        return_value=httpx.Response(
+            200,
+            json=[{"generated_text": "Hello from HuggingFace!"}],
+        )
+    )
+
+    provider = HuggingFaceProvider(api_key="test-token")
+    result = await provider.generate_text("hello")
+
+    assert result == "Hello from HuggingFace!"
+    assert route.called
+    assert route.calls[0].request.content
+    assert '"stream":true' in route.calls[0].request.content.decode().replace(" ", "")
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_huggingface_uses_explicit_timeout():
+    route = respx.post(url__startswith=HUGGINGFACE_URL_PREFIX).mock(
+        return_value=httpx.Response(
+            200,
+            json=[{"generated_text": "Hello from HuggingFace!"}],
+        )
+    )
+
+    provider = HuggingFaceProvider(api_key="test-token", timeout=30.0)
+    result = await provider.generate_text("hello")
+
+    assert result == "Hello from HuggingFace!"
+    assert route.called
 
 # ===========================================================================
 # Extra: generic non-2xx, non-429 status -> ProviderAPIError
